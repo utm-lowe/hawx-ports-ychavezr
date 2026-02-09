@@ -42,7 +42,7 @@
 //    then several things get updated.
 //
 //       - H (head)has to get moved up one and in reality the way it actually
-//         happens is the index of where head is is incremented to one 
+//         happens is the index of where head is is incremented to one
 //         (i.e, HEAD = 1)
 //
 //       - Also, as a peice of data is stored in our array, the COUNT is also
@@ -58,7 +58,7 @@
 //
 // Step 3:
 //    Now that we have a basic understanding of how data comes in, let's speed
-//    the process up.  
+//    the process up.
 //
 //    Let's say another 3 bytes of data comes in. Ex 7,2,12.
 //
@@ -131,7 +131,6 @@
 //    erasing it. In other words, without incrementing  the tail  and
 //    decrementing the count.
 
-
 #include "types.h"
 #include "riscv.h"
 #include "console.h"
@@ -140,10 +139,8 @@
 // The global collection of ports
 struct port ports[NPORT];
 
-
 // Initialize the ports
-void 
-port_init(void)
+void port_init(void)
 {
     // Initialize the ports list.  Upon initialization, the following should be
     // true:
@@ -152,47 +149,104 @@ port_init(void)
     //    - All other ports should be marked as free.
     //    - All ports should have their start and end set to indicate an empty
     //      buffer
-    
+
     // Loop through 0 to NPORT-1, initialize status of kernal ports and
     // non-kernal ports. Make sure that all ports are empty.
 
-    // YOUR CODE HERE
+    int i;
+
+    for (i = 0; i < NPORT; i++)
+    {
+        // default: normal free port
+        ports[i].free = 1;
+        ports[i].owner = 0;
+        ports[i].type = PORT_TYPE_FREE;
+        ports[i].head = 0;
+        ports[i].tail = 0;
+        ports[i].count = 0;
+    }
+
+    // then override kernel ports
+    ports[PORT_CONSOLEIN].free = 0;
+    ports[PORT_CONSOLEIN].type = PORT_TYPE_KERNEL;
+
+    ports[PORT_CONSOLEOUT].free = 0;
+    ports[PORT_CONSOLEOUT].type = PORT_TYPE_KERNEL;
+
+    ports[PORT_DISKCMD].free = 0;
+    ports[PORT_DISKCMD].type = PORT_TYPE_KERNEL;
 }
 
-
 // Close the port.
-void 
-port_close(int port)
+void port_close(int port)
 {
     // Close the port.  If the port is not open, nothing will happen.  However,
     // if it is open, we empty its contents and mark it as free.
 
-    // YOUR CODE HERE
+    if (port < 0 || port >= NPORT)
+        return;
+
+    if (ports[port].free)
+        return;
+
+    // do not close kernel ports
+    if (ports[port].type == PORT_TYPE_KERNEL)
+        return;
+
+    ports[port].head = 0;
+    ports[port].tail = 0;
+    ports[port].count = 0;
+    ports[port].free = 1;
+    ports[port].owner = 0;
+    ports[port].type = PORT_TYPE_FREE;
 }
 
-
-
 // Acquire Port.  If the specified port is negative, allocate the next available port.
-int 
-port_acquire(int port, procid_t proc_id)
+int port_acquire(int port, procid_t proc_id)
 {
     // If the port number is -1, allocate the next free port.
     // If the port number is not -1, check to see if the port is available.
-    //   If the port is not available, return -1 
+    //   If the port is not available, return -1
     // Mark the port as allocated, set the owner of the port, and
     // then return the port number allocated.
-    // 
+    //
     // If this operation fails, return -1.
 
-    // YOUR CODE HERE
-    
+    int i;
+
+    if (port != -1)
+    {
+        if (port < 0 || port >= NPORT)
+            return -1;
+        if (ports[port].type == PORT_TYPE_KERNEL)
+            return -1;
+        if (!ports[port].free)
+            return -1;
+
+        ports[port].free = 0;
+        ports[port].owner = proc_id;
+        ports[port].head = ports[port].tail = ports[port].count = 0;
+        return port;
+    }
+
+    for (i = 0; i < NPORT; i++)
+    {
+        if (!ports[i].free)
+            continue;
+        if (ports[i].type != PORT_TYPE_FREE)
+            continue;
+
+        ports[i].free = 0;
+        ports[i].owner = proc_id;
+        ports[i].head = ports[i].tail = ports[i].count = 0;
+        return i;
+    }
+
     return -1;
 }
 
-
 // Write up to n characters from buf to a port.  Return the number of bytes written.
-int 
-port_write(int port, char *buf, int n)
+int port_write(int port, char *buf, int n)
 {
     // If the port is not open, return -1
     // Write, at most, n bytes to the buffer.  If the buffer fills
@@ -201,13 +255,26 @@ port_write(int port, char *buf, int n)
     // write it.
 
     // YOUR CODE HERE
-    return -1;
+    int written = 0;
+
+    if (port < 0 || port >= NPORT)
+        return -1;
+    if (ports[port].free)
+        return -1;
+
+    while (written < n && ports[port].count < PORT_BUF_SIZE)
+    {
+        ports[port].buffer[ports[port].tail] = buf[written];
+        ports[port].tail = (ports[port].tail + 1) % PORT_BUF_SIZE;
+        ports[port].count++;
+        written++;
+    }
+
+    return written;
 }
 
-
 // Read up to n characters from a port into buf. Return the number of bytes read.
-int 
-port_read(int port, char *buf, int n)
+int port_read(int port, char *buf, int n)
 {
     // If the port is not open, return -1.
     // Read at most n bytes from the port. If the port contents are
@@ -217,5 +284,21 @@ port_read(int port, char *buf, int n)
 
     // YOUR CODE HERE
 
-    return -1;
+    int read = 0;
+
+    if (port < 0 || port >= NPORT)
+        return -1;
+
+    if (ports[port].free)
+        return -1;
+
+    while (read < n && ports[port].count > 0)
+    {
+        buf[read] = ports[port].buffer[ports[port].head];
+        ports[port].head = (ports[port].head + 1) % PORT_BUF_SIZE;
+        ports[port].count--;
+        read++;
+    }
+
+    return read;
 }
